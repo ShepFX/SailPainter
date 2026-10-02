@@ -1,0 +1,69 @@
+package com.sailpainter;
+
+import net.runelite.client.config.Config;
+import net.runelite.client.config.ConfigGroup;
+import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.Range;
+import net.runelite.client.config.Units;
+
+@ConfigGroup(SailPainterConfig.GROUP)
+public interface SailPainterConfig extends Config
+{
+	String GROUP = "sailpainter";
+
+	@ConfigSection(name = "Troubleshooting", description = "For when the picture does not land where it should", position = 10, closedByDefault = true)
+	String troubleshooting = "troubleshooting";
+
+	@ConfigItem(keyName = "paintSail", name = "Paint my sail", description = "Show your picture on the sail of your own boat, or of the boat you are aboard. Only you can see it", position = 0)
+	default boolean paintSail()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "readableBothSides", name = "Readable from both sides", description = "Show the picture the right way round from behind the sail as well. Turn off to see it mirrored from behind, like paint showing through the cloth", position = 1)
+	default boolean readableBothSides()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "opacity", name = "Opacity", description = "How solid the picture is. Lower lets the sail's own colour show through", position = 2)
+	@Units(Units.PERCENT)
+	@Range(min = 10, max = 100)
+	default int opacity()
+	{
+		return 100;
+	}
+
+	@ConfigItem(keyName = "shading", name = "Shading", description = "How much of the sail's own light and shadow falls on the picture, so that it follows the folds of the cloth", position = 3)
+	@Units(Units.PERCENT)
+	@Range(max = 100)
+	default int shading()
+	{
+		return 70;
+	}
+
+	@ConfigItem(keyName = "occlusion", name = "Hide behind crew and rigging", description = "Let people and parts of the boat in front of the sail cover the picture", position = 4)
+	default boolean occlusion()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "smooth", name = "Smooth picture", description = "Blend between the picture's pixels rather than keeping them sharp. Suits imported photos more than pixel art", position = 5)
+	default boolean smooth()
+	{
+		return false;
+	}
+
+	@ConfigItem(keyName = "paintArea", name = "Paint", description = "Sail cloth: only the cloth, leaving ropes and spars alone. Whole sail model: everything the sail is made of, if the cloth is not being picked out properly", section = troubleshooting, position = 0)
+	default PaintArea paintArea()
+	{
+		return PaintArea.CLOTH;
+	}
+
+	@ConfigItem(keyName = "debug", name = "Show debug info", description = "Label every object on your boat with its ID, and the sail with how much of it is being painted", section = troubleshooting, position = 1)
+	default boolean debug()
+	{
+		return false;
+	}
+}
