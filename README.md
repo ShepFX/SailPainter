@@ -37,6 +37,9 @@ in front of it. Ropes and spars on the sail are left alone.
 - **Paint my sail** - on or off. Your own boat is painted, and so is whichever boat you are aboard.
 - **Readable from both sides** - shows the picture the right way round from behind the sail too.
   Off, it shows mirrored from behind, like paint soaking through the cloth.
+- **Picture** - *Fit inside the sail* puts the whole picture in the biggest box that fits on the
+  cloth, so the raft's triangular sail cuts none of it off. *Stretch over the sail* covers all the
+  cloth instead, losing the corners on a triangular sail. Square sails look the same either way.
 - **Opacity**, **Shading** and **Smooth picture** (for photos rather than pixel art).
 - **Hide behind crew and rigging** - lets things in front of the sail cover the picture.
 - Under **Troubleshooting**: **Paint** whole sail model instead of just the cloth, and **Show debug

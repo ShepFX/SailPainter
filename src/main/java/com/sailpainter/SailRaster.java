@@ -20,6 +20,7 @@ final class SailRaster
 	private static final float CLOTH_BIAS = 1.003f;
 	/** Lets pixel centres exactly on a shared edge land in at least one face, so seams have no pinholes. */
 	private static final float EDGE = -0.0001f;
+	private static final float OFF_SLACK = 0.002f;
 
 	private int stride;
 	private int capacityHeight;
@@ -201,8 +202,15 @@ final class SailRaster
 		return value >= 255 ? 255 : value <= 0 ? 0 : (int) (value + 0.5f);
 	}
 
+	/** Cloth outside the picture, where a fitted picture leaves the sail plain. The slack covers rounding at the picture's edges. */
+	private static boolean offPicture(float u, float v)
+	{
+		return u < -OFF_SLACK || u > 1 + OFF_SLACK || v < -OFF_SLACK || v > 1 + OFF_SLACK;
+	}
+
 	private int nearest(float u, float v)
 	{
+		if (offPicture(u, v)) return 0;
 		int x = clamp((int) (u * pictureWidth), pictureWidth);
 		int y = clamp((int) (v * pictureHeight), pictureHeight);
 		return picture[y * pictureWidth + x];
@@ -211,6 +219,7 @@ final class SailRaster
 	/** Blends the four nearest picture pixels, weighting colour by alpha so edges do not darken. */
 	private int blended(float u, float v)
 	{
+		if (offPicture(u, v)) return 0;
 		float fx = u * pictureWidth - 0.5f;
 		float fy = v * pictureHeight - 0.5f;
 		int left = (int) Math.floor(fx);

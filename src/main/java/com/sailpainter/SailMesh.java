@@ -1,5 +1,7 @@
 package com.sailpainter;
 
+import java.util.Arrays;
+
 /**
  * One sail model copied out of the client for one frame and worked out ready to paint: which faces
  * are cloth, where each cloth corner falls on the picture, how brightly the game lights it, and
@@ -20,6 +22,10 @@ final class SailMesh
 	private static final int MAX_COLOURS = 64;
 	private static final float MIN_SHADE = 0.25f;
 	private static final float MAX_SHADE = 2f;
+	/** How finely the cloth's outline is traced when fitting the picture inside it. */
+	static final int FIT_GRID = 64;
+	/** A fitted rectangle that moves less than this from last frame's is left where it was, so the picture holds still as the cloth billows. */
+	private static final float FIT_SETTLE = 1.5f / FIT_GRID;
 
 	int vertexCount;
 	float[] x = new float[0];
@@ -33,9 +39,14 @@ final class SailMesh
 	byte[] kind = new byte[0];
 	int clothFaces;
 
-	/** Where each vertex lands on the picture, from 0 to 1 across and down. Set for cloth vertices only. */
+	/** Where each vertex lies on the cloth laid flat, from 0 to 1 across and down. Set for cloth vertices only. */
 	float[] u = new float[0];
 	float[] v = new float[0];
+	/** The part of the flattened cloth the picture is stretched over, as left, top, right, bottom. */
+	float fitLeft;
+	float fitTop;
+	float fitRight = 1;
+	float fitBottom = 1;
 	/** How brightly the game lights each corner of each cloth face, three to a face, against the face's unlit colour. */
 	float[] shade = new float[0];
 
@@ -49,6 +60,9 @@ final class SailMesh
 	private int[] faceColour = new int[0];
 	private float[] faceArea = new float[0];
 	private boolean[] inCloth = new boolean[0];
+	private final boolean[] covered = new boolean[FIT_GRID * FIT_GRID];
+	private final int[] heights = new int[FIT_GRID];
+	private final int[] stack = new int[FIT_GRID + 1];
 
 	/**
 	 * Copies the model and works out its cloth. The colour arrays are the client's lit colours, where
@@ -156,10 +170,130 @@ final class SailMesh
 			if (kind[f] != CLOTH || !visible(f)) continue;
 			int i = a[f], j = b[f], k = c[f];
 			raster.paint(
-				screenX[i], screenY[i], inverseDepth[i], flip ? 1 - u[i] : u[i], v[i], lit(f * 3, scale),
-				screenX[j], screenY[j], inverseDepth[j], flip ? 1 - u[j] : u[j], v[j], lit(f * 3 + 1, scale),
-				screenX[k], screenY[k], inverseDepth[k], flip ? 1 - u[k] : u[k], v[k], lit(f * 3 + 2, scale));
+				screenX[i], screenY[i], inverseDepth[i], pictureX(i, flip), pictureY(i), lit(f * 3, scale),
+				screenX[j], screenY[j], inverseDepth[j], pictureX(j, flip), pictureY(j), lit(f * 3 + 1, scale),
+				screenX[k], screenY[k], inverseDepth[k], pictureX(k, flip), pictureY(k), lit(f * 3 + 2, scale));
 		}
+	}
+
+	/** Spreads the picture over the whole of the cloth's flattened outline, corners and all. */
+	void stretch()
+	{
+		fitLeft = 0;
+		fitTop = 0;
+		fitRight = 1;
+		fitBottom = 1;
+	}
+
+	/**
+	 * Puts the picture in the largest upright rectangle the cloth covers completely, laid flat. A
+	 * square sail keeps the whole of its area; a triangular one gets the biggest box that fits inside
+	 * it, so no part of the picture falls off the cloth.
+	 *
+	 * @param previous left, top, right and bottom from last frame for this sail, all zero the first
+	 *                 time. Kept if the new rectangle is only a little different, and updated otherwise.
+	 */
+	void fitInside(float[] previous)
+	{
+		traceOutline();
+
+		// The largest rectangle of covered cells: each row is the floor of a histogram of how many covered cells stand above it.
+		int bestArea = 0, bestLeft = 0, bestTop = 0, bestRight = 0, bestBottom = 0;
+		Arrays.fill(heights, 0);
+		for (int row = 0; row < FIT_GRID; row++)
+		{
+			for (int column = 0; column < FIT_GRID; column++)
+			{
+				heights[column] = covered[row * FIT_GRID + column] ? heights[column] + 1 : 0;
+			}
+			int top = 0;
+			for (int column = 0; column <= FIT_GRID; column++)
+			{
+				int height = column == FIT_GRID ? 0 : heights[column];
+				while (top > 0 && heights[stack[top - 1]] >= height)
+				{
+					int tallest = heights[stack[--top]];
+					int left = top == 0 ? 0 : stack[top - 1] + 1;
+					int area = tallest * (column - left);
+					if (area > bestArea)
+					{
+						bestArea = area;
+						bestLeft = left;
+						bestRight = column;
+						bestTop = row + 1 - tallest;
+						bestBottom = row + 1;
+					}
+				}
+				stack[top++] = column;
+			}
+		}
+
+		if (bestArea == 0)
+		{
+			stretch();
+			return;
+		}
+		float left = (float) bestLeft / FIT_GRID;
+		float top = (float) bestTop / FIT_GRID;
+		float right = (float) bestRight / FIT_GRID;
+		float bottom = (float) bestBottom / FIT_GRID;
+		boolean settled = previous[2] > previous[0]
+			&& Math.abs(left - previous[0]) <= FIT_SETTLE && Math.abs(top - previous[1]) <= FIT_SETTLE
+			&& Math.abs(right - previous[2]) <= FIT_SETTLE && Math.abs(bottom - previous[3]) <= FIT_SETTLE;
+		if (!settled)
+		{
+			previous[0] = left;
+			previous[1] = top;
+			previous[2] = right;
+			previous[3] = bottom;
+		}
+		fitLeft = previous[0];
+		fitTop = previous[1];
+		fitRight = previous[2];
+		fitBottom = previous[3];
+	}
+
+	/** Marks every cell of the flattened cloth's grid whose middle some cloth face covers. */
+	private void traceOutline()
+	{
+		Arrays.fill(covered, false);
+		for (int f = 0; f < faceCount; f++)
+		{
+			if (kind[f] != CLOTH) continue;
+			float u0 = u[a[f]] * FIT_GRID, v0 = v[a[f]] * FIT_GRID;
+			float u1 = u[b[f]] * FIT_GRID, v1 = v[b[f]] * FIT_GRID;
+			float u2 = u[c[f]] * FIT_GRID, v2 = v[c[f]] * FIT_GRID;
+			float area = (u1 - u0) * (v2 - v0) - (v1 - v0) * (u2 - u0);
+			if (area == 0) continue;
+			int minColumn = Math.max(0, (int) Math.floor(Math.min(u0, Math.min(u1, u2))));
+			int maxColumn = Math.min(FIT_GRID - 1, (int) Math.ceil(Math.max(u0, Math.max(u1, u2))));
+			int minRow = Math.max(0, (int) Math.floor(Math.min(v0, Math.min(v1, v2))));
+			int maxRow = Math.min(FIT_GRID - 1, (int) Math.ceil(Math.max(v0, Math.max(v1, v2))));
+			for (int row = minRow; row <= maxRow; row++)
+			{
+				float py = row + 0.5f;
+				for (int column = minColumn; column <= maxColumn; column++)
+				{
+					float px = column + 0.5f;
+					float w0 = ((u2 - u1) * (py - v1) - (v2 - v1) * (px - u1)) / area;
+					float w1 = ((u0 - u2) * (py - v2) - (v0 - v2) * (px - u2)) / area;
+					float w2 = ((u1 - u0) * (py - v0) - (v1 - v0) * (px - u0)) / area;
+					if (w0 >= -0.001f && w1 >= -0.001f && w2 >= -0.001f) covered[row * FIT_GRID + column] = true;
+				}
+			}
+		}
+	}
+
+	/** Across the picture, from 0 to 1, with anything outside that range off the picture. */
+	private float pictureX(int vertex, boolean flip)
+	{
+		float across = (u[vertex] - fitLeft) / (fitRight - fitLeft);
+		return flip ? 1 - across : across;
+	}
+
+	private float pictureY(int vertex)
+	{
+		return (v[vertex] - fitTop) / (fitBottom - fitTop);
 	}
 
 	/**

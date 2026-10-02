@@ -107,6 +107,66 @@ public class SailMeshTest
 	}
 
 	@Test
+	public void squareSailFitsThePictureWhole()
+	{
+		SailMesh mesh = build(false);
+		mesh.fitInside(new float[4]);
+		assertEquals(0, mesh.fitLeft, 1e-4);
+		assertEquals(0, mesh.fitTop, 1e-4);
+		assertEquals(1, mesh.fitRight, 1e-4);
+		assertEquals(1, mesh.fitBottom, 1e-4);
+	}
+
+	@Test
+	public void triangularSailFitsTheBiggestBoxInside()
+	{
+		SailMesh mesh = triangle();
+		mesh.fitInside(new float[4]);
+		// The cloth is the lower left half, so the biggest box is the quarter in its square corner.
+		assertEquals(0, mesh.fitLeft, 0.05);
+		assertEquals(0.5, mesh.fitTop, 0.05);
+		assertEquals(0.5, mesh.fitRight, 0.05);
+		assertEquals(1, mesh.fitBottom, 0.05);
+	}
+
+	@Test
+	public void fittedBoxHoldsStillForSmallChanges()
+	{
+		SailMesh mesh = triangle();
+		float[] previous = {0.01f, 0.49f, 0.51f, 1};
+		mesh.fitInside(previous);
+		assertEquals(0.51f, mesh.fitRight, 1e-6);
+		assertEquals(0.51f, previous[2], 1e-6);
+
+		float[] stale = {0.3f, 0.1f, 0.9f, 0.5f};
+		mesh.fitInside(stale);
+		assertEquals(0.5, stale[2], 0.05);
+	}
+
+	@Test
+	public void stretchCoversEverything()
+	{
+		SailMesh mesh = triangle();
+		mesh.fitInside(new float[4]);
+		mesh.stretch();
+		assertEquals(0, mesh.fitTop, 0);
+		assertEquals(1, mesh.fitRight, 0);
+	}
+
+	/** A right-angled sail filling the lower left half of its box, as two layers. */
+	private static SailMesh triangle()
+	{
+		SailMesh mesh = new SailMesh();
+		float[] x = {-100, 100, -100};
+		float[] y = {-300, 0, 0};
+		float[] z = {0, 0, 0};
+		int[] colours = {CLOTH_COLOUR, CLOTH_COLOUR};
+		short[] unlit = {(short) CLOTH_COLOUR, (short) CLOTH_COLOUR};
+		mesh.build(3, x, y, z, 2, new int[]{0, 0}, new int[]{2, 1}, new int[]{1, 2}, colours, colours, new int[]{-1, -1}, unlit, null, null, false);
+		return mesh;
+	}
+
+	@Test
 	public void onlyFacesTowardsTheCameraAreVisible()
 	{
 		SailMesh mesh = build(false);

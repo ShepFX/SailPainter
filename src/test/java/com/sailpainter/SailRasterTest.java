@@ -88,6 +88,22 @@ public class SailRasterTest
 	}
 
 	@Test
+	public void clothOutsideThePictureStaysPlain()
+	{
+		// The picture fills only the left half: u runs from 0 to 2 across the square.
+		raster.setPicture(Design.of(1, 1, new int[]{RED}), 255, 1, false);
+		raster.paint(0, 0, 0.01f, 0, 0, 1, 100, 0, 0.01f, 2, 0, 1, 0, 100, 0.01f, 0, 1, 1);
+		raster.paint(100, 0, 0.01f, 2, 0, 1, 100, 100, 0.01f, 2, 1, 1, 0, 100, 0.01f, 0, 1, 1);
+		assertEquals(RED, raster.colorAt(20, 50));
+		assertEquals(0, raster.colorAt(80, 50));
+
+		raster.begin(0, 0, 100, 100);
+		raster.setPicture(Design.of(1, 1, new int[]{RED}), 255, 1, true);
+		raster.paint(0, 0, 0.01f, 0, 0, 1, 100, 0, 0.01f, 2, 0, 1, 0, 100, 0.01f, 0, 1, 1);
+		assertEquals(0, raster.colorAt(70, 10));
+	}
+
+	@Test
 	public void patchOffsetFromScreenCorner()
 	{
 		raster.begin(40, 40, 20, 20);

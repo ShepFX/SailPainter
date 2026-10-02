@@ -27,7 +27,13 @@ public interface SailPainterConfig extends Config
 		return true;
 	}
 
-	@ConfigItem(keyName = "opacity", name = "Opacity", description = "How solid the picture is. Lower lets the sail's own colour show through", position = 2)
+	@ConfigItem(keyName = "fit", name = "Picture", description = "Fit inside the sail: the whole picture in the biggest box that fits on the cloth, so a triangular sail loses none of it. Stretch over the sail: the picture covers all the cloth, and a triangular sail cuts off its corners", position = 2)
+	default PictureFit fit()
+	{
+		return PictureFit.FIT;
+	}
+
+	@ConfigItem(keyName = "opacity", name = "Opacity", description = "How solid the picture is. Lower lets the sail's own colour show through", position = 3)
 	@Units(Units.PERCENT)
 	@Range(min = 10, max = 100)
 	default int opacity()
@@ -35,7 +41,7 @@ public interface SailPainterConfig extends Config
 		return 100;
 	}
 
-	@ConfigItem(keyName = "shading", name = "Shading", description = "How much of the sail's own light and shadow falls on the picture, so that it follows the folds of the cloth", position = 3)
+	@ConfigItem(keyName = "shading", name = "Shading", description = "How much of the sail's own light and shadow falls on the picture, so that it follows the folds of the cloth", position = 4)
 	@Units(Units.PERCENT)
 	@Range(max = 100)
 	default int shading()
@@ -43,13 +49,13 @@ public interface SailPainterConfig extends Config
 		return 70;
 	}
 
-	@ConfigItem(keyName = "occlusion", name = "Hide behind crew and rigging", description = "Let people and parts of the boat in front of the sail cover the picture", position = 4)
+	@ConfigItem(keyName = "occlusion", name = "Hide behind crew and rigging", description = "Let people and parts of the boat in front of the sail cover the picture", position = 5)
 	default boolean occlusion()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "smooth", name = "Smooth picture", description = "Blend between the picture's pixels rather than keeping them sharp. Suits imported photos more than pixel art", position = 5)
+	@ConfigItem(keyName = "smooth", name = "Smooth picture", description = "Blend between the picture's pixels rather than keeping them sharp. Suits imported photos more than pixel art", position = 6)
 	default boolean smooth()
 	{
 		return false;

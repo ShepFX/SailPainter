@@ -6,6 +6,8 @@ import java.awt.Graphics2D;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
 import javax.inject.Inject;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
@@ -46,6 +48,8 @@ class SailOverlay extends Overlay implements Projector
 	private final List<GameObject> sails = new ArrayList<>();
 	private final float[] point = new float[4];
 	private final float[] bounds = new float[4];
+	/** Where the picture was fitted on each sail last frame, so it can be held steady. */
+	private final Map<GameObject, float[]> fits = new WeakHashMap<>();
 	private float[] occluderX = new float[0];
 	private float[] occluderY = new float[0];
 	private float[] occluderDepth = new float[0];
@@ -80,6 +84,7 @@ class SailOverlay extends Overlay implements Projector
 		}
 		Design design = plugin.getDesign();
 		boolean wholeModel = config.paintArea() == PaintArea.WHOLE_MODEL;
+		boolean fit = config.fit() == PictureFit.FIT;
 
 		int viewX = client.getViewportXOffset();
 		int viewY = client.getViewportYOffset();
@@ -120,7 +125,7 @@ class SailOverlay extends Overlay implements Projector
 			for (GameObject sail : sails)
 			{
 				SailMesh mesh = mesh(count);
-				boolean prepared = prepare(sail, mesh, wholeModel);
+				boolean prepared = prepare(sail, mesh, wholeModel, fit);
 				if (debug) label(graphics, sail, describe(sail) + " sail, cloth " + (prepared ? mesh.clothFaces : 0) + "/" + mesh.faceCount, DEBUG_SAIL);
 				if (prepared && mesh.addClothBounds(bounds)) count++;
 			}
@@ -188,7 +193,7 @@ class SailOverlay extends Overlay implements Projector
 		}
 	}
 
-	private boolean prepare(GameObject sail, SailMesh mesh, boolean wholeModel)
+	private boolean prepare(GameObject sail, SailMesh mesh, boolean wholeModel, boolean fit)
 	{
 		Renderable renderable = sail.getRenderable();
 		Model model = modelOf(renderable);
@@ -202,6 +207,8 @@ class SailOverlay extends Overlay implements Projector
 			model.getFaceColors1(), model.getFaceColors2(), model.getFaceColors3(),
 			model.getUnlitFaceColors(), model.getFaceTextures(), model.getFaceTransparencies(), wholeModel);
 		if (mesh.clothFaces == 0) return false;
+		if (fit) mesh.fitInside(fits.computeIfAbsent(sail, key -> new float[4]));
+		else mesh.stretch();
 		mesh.project(this, sail.getX(), sail.getY(), sail.getZ() - renderable.getAnimationHeightOffset(), sail.getModelOrientation());
 		return true;
 	}
