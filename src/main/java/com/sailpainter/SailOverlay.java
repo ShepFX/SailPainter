@@ -75,14 +75,13 @@ class SailOverlay extends Overlay implements Projector
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		boolean paint = config.paintSail();
+		boolean paintMine = config.paintSail();
 		boolean debug = config.debug();
-		if (!paint && !debug)
+		if (!paintMine && !debug && !config.showPartySails())
 		{
 			plugin.reportStatus(SailPainterPlugin.Status.OFF);
 			return null;
 		}
-		Design design = plugin.getDesign();
 		boolean wholeModel = config.paintArea() == PaintArea.WHOLE_MODEL;
 		boolean fit = config.fit() == PictureFit.FIT;
 
@@ -94,12 +93,16 @@ class SailOverlay extends Overlay implements Projector
 		centreY = viewHeight / 2f + viewY;
 		scale = client.getScale();
 
+		// The status is about your own sail; party members' boats are painted without reporting on them.
 		SailPainterPlugin.Status status = SailPainterPlugin.Status.NO_BOAT;
-		for (WorldView boat : plugin.boats())
+		for (SailPainterPlugin.Boat boat : plugin.boats())
 		{
-			projection = boat.getCanvasProjection();
+			WorldView view = boat.view;
+			Design design = boat.design;
+			boolean paint = !boat.mine || paintMine;
+			projection = view.getCanvasProjection();
 			if (projection == null) continue;
-			Collection<GameObject> objects = plugin.objectsOn(boat.getId());
+			Collection<GameObject> objects = plugin.objectsOn(view.getId());
 
 			sails.clear();
 			for (GameObject object : objects)
@@ -109,12 +112,12 @@ class SailOverlay extends Overlay implements Projector
 			}
 			if (sails.isEmpty())
 			{
-				status = better(status, SailPainterPlugin.Status.NO_SAIL);
+				if (boat.mine) status = better(status, SailPainterPlugin.Status.NO_SAIL);
 				continue;
 			}
 			if (paint && design.isBlank())
 			{
-				status = better(status, SailPainterPlugin.Status.BLANK);
+				if (boat.mine) status = better(status, SailPainterPlugin.Status.BLANK);
 				if (!debug) continue;
 			}
 
@@ -137,7 +140,7 @@ class SailOverlay extends Overlay implements Projector
 			int bottom = Math.min(viewY + viewHeight, (int) Math.ceil(bounds[3]) + 1);
 			if (count == 0 || left >= right || top >= bottom)
 			{
-				status = better(status, SailPainterPlugin.Status.NOT_IN_VIEW);
+				if (boat.mine) status = better(status, SailPainterPlugin.Status.NOT_IN_VIEW);
 				continue;
 			}
 
@@ -147,7 +150,7 @@ class SailOverlay extends Overlay implements Projector
 			if (config.occlusion())
 			{
 				occludeObjects(objects);
-				occludeActors(boat);
+				occludeActors(view);
 			}
 			boolean readable = config.readableBothSides();
 			for (int i = 0; i < count; i++)
@@ -156,9 +159,9 @@ class SailOverlay extends Overlay implements Projector
 				mesh.paint(raster, readable && mesh.mirrored());
 			}
 			graphics.drawImage(raster.image(), left, top, right, bottom, 0, 0, right - left, bottom - top, null);
-			status = SailPainterPlugin.Status.PAINTING;
+			if (boat.mine) status = SailPainterPlugin.Status.PAINTING;
 		}
-		plugin.reportStatus(paint ? status : SailPainterPlugin.Status.OFF);
+		plugin.reportStatus(paintMine ? status : SailPainterPlugin.Status.OFF);
 		return null;
 	}
 

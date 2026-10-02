@@ -11,6 +11,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -28,23 +29,33 @@ import net.runelite.api.WorldView;
 import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.WorldViewLoaded;
 import net.runelite.api.events.WorldViewUnloaded;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.PartyChanged;
+import net.runelite.client.party.PartyMember;
+import net.runelite.client.party.PartyService;
+import net.runelite.client.party.WSClient;
+import net.runelite.client.party.events.UserJoin;
+import net.runelite.client.party.events.UserPart;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
+import net.runelite.client.util.Text;
 
 @Slf4j
 @PluginDescriptor(
 	name = "Sail Painter",
 	description = "Draw a picture and see it on your boat's sail",
-	tags = {"sailing", "sail", "boat", "ship", "paint", "draw", "custom", "cosmetic", "pixel art"}
+	tags = {"sailing", "sail", "boat", "ship", "paint", "draw", "custom", "cosmetic", "pixel art", "party"},
+	internalName = "sail-painter"
 )
 public class SailPainterPlugin extends Plugin
 {
@@ -62,13 +73,18 @@ public class SailPainterPlugin extends Plugin
 	@Inject private SailOverlay overlay;
 	@Inject private ClientToolbar clientToolbar;
 	@Inject private ScheduledExecutorService executor;
+	@Inject private PartyService partyService;
+	@Inject private WSClient wsClient;
 
-	private final DesignStore store = new DesignStore();
+	private DesignStore store;
+	/** Whether the party was last told about a design, so that it can be told when that stops. */
+	private volatile boolean shared;
 
 	// Client thread state.
 	/** Every object standing on a boat, by the boat's world view, kept up from spawn events. */
 	private final Map<Integer, Set<GameObject>> boatObjects = new HashMap<>();
-	private final List<WorldView> boats = new ArrayList<>();
+	private final List<Boat> boats = new ArrayList<>();
+	private final List<Boat> boatPool = new ArrayList<>();
 
 	// Swing thread state.
 	private SailPainterPanel panel;
@@ -79,7 +95,32 @@ public class SailPainterPlugin extends Plugin
 	private volatile Design design = Design.blank(DEFAULT_SIZE, DEFAULT_SIZE);
 	private volatile Status status = Status.NO_BOAT;
 	private volatile long statusAt;
+	private volatile String localName;
+	/** Designs shared by other party members, by member. Filled from the party connection's thread. */
+	private final Map<Long, PartyDesign> partyDesigns = new ConcurrentHashMap<>();
 	private ScheduledFuture<?> pendingSave;
+
+	/** A boat to paint and the design that goes on it. */
+	static final class Boat
+	{
+		WorldView view;
+		Design design;
+		/** Yours, or the one you are aboard, rather than a party member's. */
+		boolean mine;
+	}
+
+	private static final class PartyDesign
+	{
+		/** The sender's in-game name, standardised for comparing. */
+		final String name;
+		final Design design;
+
+		PartyDesign(String name, Design design)
+		{
+			this.name = name;
+			this.design = design;
+		}
+	}
 
 	/** What the overlay last found. With more than one boat, the later of the first five wins. */
 	enum Status
@@ -118,6 +159,7 @@ public class SailPainterPlugin extends Plugin
 			.panel(panel)
 			.build();
 		clientToolbar.addNavigation(navigationButton);
+		wsClient.registerMessage(SailPainterDesign.class);
 		executor.execute(this::loadDesign);
 		clientThread.invokeLater(this::scanAll);
 	}
@@ -128,6 +170,11 @@ public class SailPainterPlugin extends Plugin
 		overlayManager.remove(overlay);
 		clientToolbar.removeNavigation(navigationButton);
 		flushSave();
+		// Tell the party this sail is going plain while the message type is still known, then stop listening.
+		// Sending nothing needs no encoding, and the send itself only queues.
+		share(false);
+		wsClient.unregisterMessage(SailPainterDesign.class);
+		partyDesigns.clear();
 		clientThread.invoke(boatObjects::clear);
 		SailPainterPanel oldPanel = panel;
 		StudioWindow oldStudio = studio;
@@ -189,8 +236,74 @@ public class SailPainterPlugin extends Plugin
 		}
 	}
 
-	/** Client thread. The boats to paint: your own, and whichever one you are aboard. */
-	List<WorldView> boats()
+	@Subscribe
+	public void onGameTick(GameTick event)
+	{
+		// The party matches a design to a boat by the sender's name, which is only known once logged in.
+		Player me = client.getLocalPlayer();
+		String name = me == null ? null : me.getName();
+		if (name != null && !name.equals(localName))
+		{
+			localName = name;
+			shareSoon();
+		}
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!SailPainterConfig.GROUP.equals(event.getGroup())) return;
+		if ("shareWithParty".equals(event.getKey())) shareSoon();
+	}
+
+	@Subscribe
+	public void onPartyChanged(PartyChanged event)
+	{
+		partyDesigns.clear();
+		shareSoon();
+	}
+
+	@Subscribe
+	public void onUserJoin(UserJoin event)
+	{
+		// Someone new: they need this design too. Joining ourselves comes as a join as well.
+		shareSoon();
+	}
+
+	@Subscribe
+	public void onUserPart(UserPart event)
+	{
+		partyDesigns.remove(event.getMemberId());
+	}
+
+	/** Party connection thread. Another member's design, or word that they stopped sharing it. */
+	@Subscribe
+	public void onSailPainterDesign(SailPainterDesign message)
+	{
+		PartyMember local = partyService.getLocalMember();
+		if (local != null && local.getMemberId() == message.getMemberId()) return;
+		if (message.getName() == null || message.getPng() == null)
+		{
+			partyDesigns.remove(message.getMemberId());
+			return;
+		}
+		try
+		{
+			Design received = DesignCodec.unshare(message.getPng());
+			partyDesigns.put(message.getMemberId(), new PartyDesign(Text.standardize(message.getName()), received));
+		}
+		catch (IOException e)
+		{
+			log.debug("Ignoring an unreadable sail design from party member {}", message.getMemberId(), e);
+		}
+	}
+
+	/**
+	 * Client thread. The boats to paint and what goes on each: your design on your own boat, a party
+	 * member's on the boat they are aboard if they share theirs, and yours on any other boat you are
+	 * aboard.
+	 */
+	List<Boat> boats()
 	{
 		boats.clear();
 		WorldView top = client.getTopLevelWorldView();
@@ -198,6 +311,7 @@ public class SailPainterPlugin extends Plugin
 		Player me = client.getLocalPlayer();
 		WorldView aboard = me == null ? null : me.getWorldView();
 		if (aboard != null && aboard.isTopLevel()) aboard = null;
+		boolean showParty = config.showPartySails() && !partyDesigns.isEmpty();
 
 		boolean aboardSeen = false;
 		for (WorldEntity entity : top.worldEntities())
@@ -206,13 +320,44 @@ public class SailPainterPlugin extends Plugin
 			if (view == null) continue;
 			boolean isAboard = aboard != null && view.getId() == aboard.getId();
 			aboardSeen |= isAboard;
-			if (entity.getOwnerType() != WorldEntity.OWNER_TYPE_SELF_PLAYER && !isAboard) continue;
 			// The game hides a boat that overlaps another; its sail should vanish with it.
 			if (entity.isHiddenForOverlap()) continue;
-			boats.add(view);
+			if (entity.getOwnerType() == WorldEntity.OWNER_TYPE_SELF_PLAYER)
+			{
+				addBoat(view, design, true);
+				continue;
+			}
+			Design theirs = showParty ? partyDesignAboard(view, me) : null;
+			if (theirs != null) addBoat(view, theirs, false);
+			else if (isAboard) addBoat(view, design, true);
 		}
-		if (aboard != null && !aboardSeen) boats.add(aboard);
+		if (aboard != null && !aboardSeen) addBoat(aboard, design, true);
 		return boats;
+	}
+
+	/** The design of a sharing party member standing on the boat, if any. */
+	private Design partyDesignAboard(WorldView view, Player me)
+	{
+		for (Player player : view.players())
+		{
+			if (player == null || player == me || player.getName() == null) continue;
+			String name = Text.standardize(player.getName());
+			for (PartyDesign shared : partyDesigns.values())
+			{
+				if (shared.name.equals(name)) return shared.design;
+			}
+		}
+		return null;
+	}
+
+	private void addBoat(WorldView view, Design design, boolean mine)
+	{
+		if (boatPool.size() <= boats.size()) boatPool.add(new Boat());
+		Boat boat = boatPool.get(boats.size());
+		boat.view = view;
+		boat.design = design;
+		boat.mine = mine;
+		boats.add(boat);
 	}
 
 	/** Client thread. Everything standing on the boat with the given world view. */
@@ -320,11 +465,22 @@ public class SailPainterPlugin extends Plugin
 		}
 	}
 
+	/** Party status for the panel, or null when there is nothing to say. */
+	String partyText()
+	{
+		int showing = config.showPartySails() ? partyDesigns.size() : 0;
+		String received = showing == 0 ? "" : " " + showing + (showing == 1 ? " party member shares" : " party members share") + " their sail with you.";
+		if (!config.shareWithParty()) return showing == 0 ? null : received.trim();
+		if (!partyService.isInParty()) return "Sharing is on, but you are not in a party. Join one from RuneLite's Party panel." + received;
+		return "Your sail is shared with your party." + received;
+	}
+
+	/** Executor thread. Loads the saved design from the plugin's own folder. */
 	private void loadDesign()
 	{
 		try
 		{
-			Design saved = store.load();
+			Design saved = store().load();
 			if (saved != null) setDesign(saved, false, null);
 		}
 		catch (IOException e)
@@ -333,10 +489,57 @@ public class SailPainterPlugin extends Plugin
 		}
 	}
 
+	/** Executor thread. The plugin's folder is made on first use, which is disk work. */
+	private synchronized DesignStore store() throws IOException
+	{
+		if (store == null) store = new DesignStore(getPluginDirectory());
+		return store;
+	}
+
+	/** Sends the design to the party a moment from now, off the thread that asked. */
+	private void shareSoon()
+	{
+		executor.execute(() -> share(config.shareWithParty()));
+	}
+
+	/**
+	 * Sends the current design to the party, or, when sharing has just been turned off, an empty one
+	 * so that it disappears from their screens too. Encoding is work, so turning it on belongs on the executor.
+	 */
+	private synchronized void share(boolean on)
+	{
+		if (!partyService.isInParty() || localName == null)
+		{
+			shared = false;
+			return;
+		}
+		if (!on && !shared) return;
+		String png = null;
+		Design current = design;
+		if (on && !current.isBlank())
+		{
+			try
+			{
+				png = DesignCodec.share(current);
+			}
+			catch (IOException e)
+			{
+				log.debug("Could not prepare the sail design for the party", e);
+				return;
+			}
+		}
+		partyService.send(new SailPainterDesign(localName, png));
+		shared = png != null;
+	}
+
 	private synchronized void scheduleSave()
 	{
 		if (pendingSave != null) pendingSave.cancel(false);
-		pendingSave = executor.schedule(() -> save(design), SAVE_DELAY_MS, TimeUnit.MILLISECONDS);
+		pendingSave = executor.schedule(() ->
+		{
+			save(design);
+			share(config.shareWithParty());
+		}, SAVE_DELAY_MS, TimeUnit.MILLISECONDS);
 	}
 
 	/** Writes a save that was still waiting, without waiting for it. */
@@ -353,7 +556,7 @@ public class SailPainterPlugin extends Plugin
 	{
 		try
 		{
-			store.save(design);
+			store().save(design);
 		}
 		catch (IOException e)
 		{

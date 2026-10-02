@@ -31,6 +31,7 @@ class SailPainterPanel extends PluginPanel
 	private final SailPainterPlugin plugin;
 	private final Preview preview = new Preview();
 	private final JLabel status = new JLabel();
+	private final JLabel party = new JLabel();
 	private final Timer timer;
 
 	SailPainterPanel(SailPainterPlugin plugin)
@@ -54,6 +55,9 @@ class SailPainterPanel extends PluginPanel
 		content.add(Box.createVerticalStrut(8));
 		status.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		content.add(left(status));
+		party.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		party.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+		content.add(left(party));
 		content.add(Box.createVerticalStrut(10));
 
 		JButton studio = new JButton("Open drawing studio");
@@ -83,7 +87,7 @@ class SailPainterPanel extends PluginPanel
 		content.add(left(buttons));
 		content.add(Box.createVerticalStrut(12));
 
-		JLabel note = new JLabel(html("Only you can see your painted sail. Settings are under Sail Painter in the configuration panel."));
+		JLabel note = new JLabel(html("Only you can see your painted sail, unless you share it with your RuneLite party. Settings are under Sail Painter in the configuration panel."));
 		note.setFont(FontManager.getRunescapeSmallFont());
 		note.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
 		content.add(left(note));
@@ -108,6 +112,9 @@ class SailPainterPanel extends PluginPanel
 	private void showStatus()
 	{
 		status.setText(html(plugin.getStatus().text));
+		String partyText = plugin.partyText();
+		party.setText(partyText == null ? "" : html(partyText));
+		party.setVisible(partyText != null);
 	}
 
 	private static String html(String text)

@@ -12,6 +12,21 @@ public interface SailPainterConfig extends Config
 {
 	String GROUP = "sailpainter";
 
+	@ConfigSection(name = "Party", description = "Sharing sails with friends in your RuneLite party", position = 9)
+	String party = "party";
+
+	@ConfigItem(keyName = "shareWithParty", name = "Share with party", description = "Send your design to the people in your RuneLite party who also have Sail Painter, so they see it on your boat. Join a party from RuneLite's Party panel", section = party, position = 0)
+	default boolean shareWithParty()
+	{
+		return false;
+	}
+
+	@ConfigItem(keyName = "showPartySails", name = "Show party sails", description = "Paint the sails of party members who share their design, on whichever boat they are aboard", section = party, position = 1)
+	default boolean showPartySails()
+	{
+		return true;
+	}
+
 	@ConfigSection(name = "Troubleshooting", description = "For when the picture does not land where it should", position = 10, closedByDefault = true)
 	String troubleshooting = "troubleshooting";
 

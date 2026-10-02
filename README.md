@@ -1,11 +1,12 @@
 # Sail Painter
 
 A [RuneLite](https://runelite.net) plugin that lets you draw a picture and see it on the sail of
-your boat.
+your boat, and share it with friends in your RuneLite party.
 
-Only you can see it. The game has no way to change what a sail looks like, so the plugin paints
-your picture over the sail on your own screen, every frame, following the cloth as it billows and
-the boat as it turns. It changes nothing in the game and sends nothing anywhere.
+The game has no way to change what a sail looks like, so the plugin paints your picture over the
+sail on your own screen, every frame, following the cloth as it billows and the boat as it turns.
+It changes nothing in the game. Unless you share it with your party, nobody else sees it and
+nothing is sent anywhere.
 
 ## Drawing
 
@@ -24,13 +25,26 @@ Open the **Sail Painter** button in the sidebar, then **Open drawing studio**.
 
 Your sail updates as you draw. Whatever you leave empty shows the sail's own colour through.
 
-The design is kept in `.runelite/sail-painter/sail.png`.
+The design is kept in `.runelite/plugin-data/sail-painter/sail.png`.
 
 ## How it looks
 
 The picture is laid across the sail's cloth and picks up the game's own light and shade, so it
 follows the folds. Your character, your crew, the mast and everything else on the boat still stand
 in front of it. Ropes and spars on the sail are left alone.
+
+## Sharing with your party
+
+Turn on **Share with party** and everyone in your RuneLite party (from the Party panel in the sidebar)
+who also has Sail Painter sees your design on your boat, and you see theirs on theirs. Designs go
+through RuneLite's own party service, the same one the Party plugin uses, so there is no other
+server involved.
+
+- A friend's design goes on whichever boat they are aboard, so it shows while they are on their
+  boat, not while it is moored without them.
+- Large or very detailed designs are shrunk before they are sent.
+- Turning sharing off, or turning the plugin off, puts your sail back to plain on their screens.
+- **Show party sails** turns other people's designs off on your screen.
 
 ## Settings
 
@@ -42,6 +56,7 @@ in front of it. Ropes and spars on the sail are left alone.
   cloth instead, losing the corners on a triangular sail. Square sails look the same either way.
 - **Opacity**, **Shading** and **Smooth picture** (for photos rather than pixel art).
 - **Hide behind crew and rigging** - lets things in front of the sail cover the picture.
+- Under **Party**: **Share with party** (off until you turn it on) and **Show party sails**.
 - Under **Troubleshooting**: **Paint** whole sail model instead of just the cloth, and **Show debug
   info**, which labels every object on your boat with its ID.
 

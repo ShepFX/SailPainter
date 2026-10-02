@@ -3,19 +3,18 @@ package com.sailpainter;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import java.awt.image.BufferedImage;
-import java.io.File;
-import org.junit.Rule;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Random;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 
 public class DesignTest
 {
-	@Rule
-	public TemporaryFolder folder = new TemporaryFolder();
-
 	@Test
 	public void blankUntilSomethingIsDrawn()
 	{
@@ -59,21 +58,62 @@ public class DesignTest
 	}
 
 	@Test
-	public void savesAndLoads() throws Exception
+	public void pngKeepsEveryPixel() throws Exception
 	{
-		File directory = new File(folder.getRoot(), "sail-painter");
-		DesignStore store = new DesignStore(directory);
-		assertNull(store.load());
-
 		int[] pixels = {0xffff0000, 0x00000000, 0x80123456, 0xffffffff};
-		store.save(Design.of(2, 2, pixels));
-		store.save(Design.of(2, 2, pixels));
-		Design loaded = store.load();
+		byte[] png = DesignCodec.png(Design.of(2, 2, pixels));
+		Design loaded = Design.fromImage(DesignCodec.read(new ByteArrayInputStream(png), 10), Design.MAX_SIZE);
 		assertEquals(2, loaded.width());
 		assertEquals(0xffff0000, loaded.pixel(0, 0));
 		assertEquals(0, loaded.pixel(1, 0) >>> 24);
 		assertEquals(0x80123456, loaded.pixel(0, 1));
-		assertFalse(new File(directory, "sail.png.tmp").exists());
+	}
+
+	@Test(expected = IOException.class)
+	public void oversizedPicturesAreRefusedBeforeDecoding() throws Exception
+	{
+		byte[] png = DesignCodec.png(Design.blank(64, 8));
+		DesignCodec.read(new ByteArrayInputStream(png), 32);
+	}
+
+	@Test(expected = IOException.class)
+	public void nonPicturesAreRefused() throws Exception
+	{
+		DesignCodec.read(new ByteArrayInputStream("not a picture".getBytes(StandardCharsets.UTF_8)), 32);
+	}
+
+	@Test
+	public void sharedDesignComesBackTheSame() throws Exception
+	{
+		Design design = Examples.JOLLY_ROGER.draw(64, 64);
+		Design received = DesignCodec.unshare(DesignCodec.share(design));
+		assertArrayEquals(design.pixels(), received.pixels());
+	}
+
+	@Test
+	public void detailedDesignsShrinkToShare() throws Exception
+	{
+		// Noise does not compress, so a 256 square of it is far over the limit.
+		Random random = new Random(1);
+		int[] noise = new int[256 * 256];
+		for (int i = 0; i < noise.length; i++) noise[i] = 0xff000000 | random.nextInt(0x1000000);
+		String text = DesignCodec.share(Design.of(256, 256, noise));
+		assertTrue(Base64.getDecoder().decode(text).length <= DesignCodec.MAX_SHARED_BYTES);
+		assertTrue(DesignCodec.unshare(text).width() < 256);
+	}
+
+	@Test(expected = IOException.class)
+	public void oversizedSharedTextIsRefused() throws Exception
+	{
+		char[] text = new char[DesignCodec.MAX_SHARED_BYTES * 2];
+		Arrays.fill(text, 'A');
+		DesignCodec.unshare(new String(text));
+	}
+
+	@Test(expected = IOException.class)
+	public void garbledSharedTextIsRefused() throws Exception
+	{
+		DesignCodec.unshare("this is %% not base64");
 	}
 
 	@Test
