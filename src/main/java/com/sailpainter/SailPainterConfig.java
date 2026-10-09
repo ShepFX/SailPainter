@@ -12,6 +12,28 @@ public interface SailPainterConfig extends Config
 {
 	String GROUP = "sailpainter";
 
+	@ConfigSection(name = "Community", description = "Sails other players submitted, checked by a moderator before anyone sees them", position = 8)
+	String community = "community";
+
+	@ConfigItem(
+		keyName = "communitySails",
+		name = "Community sails",
+		description = "See the sails other Sail Painter players have had approved, on their boats, and submit, hide and report sails from the Sail Painter panel. The list and pictures come from " + CommunitySails.SITE,
+		warning = "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers",
+		section = community,
+		position = 0
+	)
+	default boolean communitySails()
+	{
+		return false;
+	}
+
+	@ConfigItem(keyName = "hiddenSails", name = "", description = "", hidden = true)
+	default String hiddenSails()
+	{
+		return "";
+	}
+
 	@ConfigSection(name = "Party", description = "Sharing sails with friends in your RuneLite party", position = 9)
 	String party = "party";
 
