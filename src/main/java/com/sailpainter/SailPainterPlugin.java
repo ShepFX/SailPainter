@@ -1,5 +1,6 @@
 package com.sailpainter;
 
+import com.google.gson.Gson;
 import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -8,6 +9,8 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -15,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
@@ -48,13 +52,15 @@ import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
+import net.runelite.client.util.LinkBrowser;
 import net.runelite.client.util.Text;
+import okhttp3.OkHttpClient;
 
 @Slf4j
 @PluginDescriptor(
 	name = "Sail Painter",
 	description = "Draw a picture and see it on your boat's sail",
-	tags = {"sailing", "sail", "boat", "ship", "paint", "draw", "custom", "cosmetic", "pixel art", "party"},
+	tags = {"sailing", "sail", "boat", "ship", "paint", "draw", "custom", "cosmetic", "pixel art", "party", "community"},
 	internalName = "sail-painter"
 )
 public class SailPainterPlugin extends Plugin
@@ -65,6 +71,8 @@ public class SailPainterPlugin extends Plugin
 	private static final long SAVE_DELAY_MS = 750;
 	/** The overlay reports in every frame; a report older than this means it is not running. */
 	private static final long STATUS_STALE_MS = 2000;
+	/** How often the community list and your own sail's state are fetched again. */
+	private static final long COMMUNITY_REFRESH_MINUTES = 5;
 
 	@Inject private Client client;
 	@Inject private ClientThread clientThread;
@@ -75,6 +83,9 @@ public class SailPainterPlugin extends Plugin
 	@Inject private ScheduledExecutorService executor;
 	@Inject private PartyService partyService;
 	@Inject private WSClient wsClient;
+	@Inject private OkHttpClient okHttpClient;
+	@Inject private Gson gson;
+	@Inject private ConfigManager configManager;
 
 	private DesignStore store;
 	/** Whether the party was last told about a design, so that it can be told when that stops. */
@@ -99,6 +110,48 @@ public class SailPainterPlugin extends Plugin
 	/** Designs shared by other party members, by member. Filled from the party connection's thread. */
 	private final Map<Long, PartyDesign> partyDesigns = new ConcurrentHashMap<>();
 	private ScheduledFuture<?> pendingSave;
+	private ScheduledFuture<?> communityRefresh;
+	/** Made on the executor at start, since finding the plugin's folder is disk work. */
+	private volatile CommunitySails community;
+	private volatile long accountHash = -1;
+	/** The server's word on your own sail, or null before it has answered. */
+	private volatile CommunitySails.Mine mine;
+	/** The last thing that went wrong talking to the sail server, shown until the next success. */
+	private volatile String communityProblem;
+	private volatile Set<String> hiddenSails = Collections.emptySet();
+	/** Community sails on boats around you, worked out each tick for the panel. */
+	private volatile List<Nearby> nearby = Collections.emptyList();
+
+	/** A community sail on a boat in view. */
+	static final class Nearby
+	{
+		final String id;
+		final String name;
+		final String key;
+		final boolean hidden;
+
+		Nearby(String id, String name, String key, boolean hidden)
+		{
+			this.id = id;
+			this.name = name;
+			this.key = key;
+			this.hidden = hidden;
+		}
+
+		@Override
+		public boolean equals(Object other)
+		{
+			if (!(other instanceof Nearby)) return false;
+			Nearby that = (Nearby) other;
+			return id.equals(that.id) && hidden == that.hidden;
+		}
+
+		@Override
+		public int hashCode()
+		{
+			return id.hashCode() * 31 + (hidden ? 1 : 0);
+		}
+	}
 
 	/** A boat to paint and the design that goes on it. */
 	static final class Boat
@@ -160,7 +213,9 @@ public class SailPainterPlugin extends Plugin
 			.build();
 		clientToolbar.addNavigation(navigationButton);
 		wsClient.registerMessage(SailPainterDesign.class);
+		hiddenSails = CommunitySails.parseHidden(config.hiddenSails());
 		executor.execute(this::loadDesign);
+		executor.execute(this::startCommunity);
 		clientThread.invokeLater(this::scanAll);
 	}
 
@@ -169,6 +224,11 @@ public class SailPainterPlugin extends Plugin
 	{
 		overlayManager.remove(overlay);
 		clientToolbar.removeNavigation(navigationButton);
+		if (communityRefresh != null) communityRefresh.cancel(false);
+		communityRefresh = null;
+		community = null;
+		mine = null;
+		nearby = Collections.emptyList();
 		flushSave();
 		// Tell the party this sail is going plain while the message type is still known, then stop listening.
 		// Sending nothing needs no encoding, and the send itself only queues.
@@ -247,6 +307,14 @@ public class SailPainterPlugin extends Plugin
 			localName = name;
 			shareSoon();
 		}
+		long hash = client.getAccountHash();
+		if (hash != accountHash)
+		{
+			accountHash = hash;
+			mine = null;
+			if (hash != -1) executor.execute(this::refreshMine);
+		}
+		findNearby(me);
 	}
 
 	@Subscribe
@@ -254,6 +322,17 @@ public class SailPainterPlugin extends Plugin
 	{
 		if (!SailPainterConfig.GROUP.equals(event.getGroup())) return;
 		if ("shareWithParty".equals(event.getKey())) shareSoon();
+		if ("hiddenSails".equals(event.getKey())) hiddenSails = CommunitySails.parseHidden(config.hiddenSails());
+		if ("communitySails".equals(event.getKey()))
+		{
+			communityProblem = null;
+			if (config.communitySails()) executor.execute(this::refreshCommunity);
+			else
+			{
+				mine = null;
+				nearby = Collections.emptyList();
+			}
+		}
 	}
 
 	@Subscribe
@@ -312,6 +391,8 @@ public class SailPainterPlugin extends Plugin
 		WorldView aboard = me == null ? null : me.getWorldView();
 		if (aboard != null && aboard.isTopLevel()) aboard = null;
 		boolean showParty = config.showPartySails() && !partyDesigns.isEmpty();
+		CommunitySails sails = config.communitySails() ? community : null;
+		if (sails != null && sails.size() == 0) sails = null;
 
 		boolean aboardSeen = false;
 		for (WorldEntity entity : top.worldEntities())
@@ -328,6 +409,7 @@ public class SailPainterPlugin extends Plugin
 				continue;
 			}
 			Design theirs = showParty ? partyDesignAboard(view, me) : null;
+			if (theirs == null && sails != null) theirs = communityDesignAboard(sails, view, me);
 			if (theirs != null) addBoat(view, theirs, false);
 			else if (isAboard) addBoat(view, design, true);
 		}
@@ -348,6 +430,51 @@ public class SailPainterPlugin extends Plugin
 			}
 		}
 		return null;
+	}
+
+	/** The approved sail of someone standing on the boat, unless you hid it or it is still loading. */
+	private Design communityDesignAboard(CommunitySails sails, WorldView view, Player me)
+	{
+		Set<String> hidden = hiddenSails;
+		for (Player player : view.players())
+		{
+			if (player == null || player == me || player.getName() == null) continue;
+			String key = CommunitySails.nameKey(player.getName());
+			if (hidden.contains(key)) continue;
+			CommunitySails.Listing listing = sails.listing(key);
+			if (listing == null) continue;
+			Design design = sails.design(listing);
+			if (design != null) return design;
+		}
+		return null;
+	}
+
+	/** Client thread, once a tick. The community sails on boats around you, for the panel to list. */
+	private void findNearby(Player me)
+	{
+		CommunitySails sails = config.communitySails() ? community : null;
+		WorldView top = client.getTopLevelWorldView();
+		if (sails == null || top == null)
+		{
+			if (!nearby.isEmpty()) nearby = Collections.emptyList();
+			return;
+		}
+		Set<String> hidden = hiddenSails;
+		Map<String, Nearby> found = new LinkedHashMap<>();
+		for (WorldEntity entity : top.worldEntities())
+		{
+			WorldView view = entity.getWorldView();
+			if (view == null || entity.getOwnerType() == WorldEntity.OWNER_TYPE_SELF_PLAYER) continue;
+			for (Player player : view.players())
+			{
+				if (player == null || player == me || player.getName() == null) continue;
+				String key = CommunitySails.nameKey(player.getName());
+				CommunitySails.Listing listing = sails.listing(key);
+				if (listing != null) found.putIfAbsent(key, new Nearby(listing.id, listing.name, key, hidden.contains(key)));
+			}
+		}
+		List<Nearby> list = new ArrayList<>(found.values());
+		if (!list.equals(nearby)) nearby = Collections.unmodifiableList(list);
 	}
 
 	private void addBoat(WorldView view, Design design, boolean mine)
@@ -473,6 +600,184 @@ public class SailPainterPlugin extends Plugin
 		if (!config.shareWithParty()) return showing == 0 ? null : received.trim();
 		if (!partyService.isInParty()) return "Sharing is on, but you are not in a party. Join one from RuneLite's Party panel." + received;
 		return "Your sail is shared with your party." + received;
+	}
+
+	// --- Community sails ---
+
+	/** Executor thread. */
+	private void startCommunity()
+	{
+		try
+		{
+			community = new CommunitySails(okHttpClient, gson, executor, getPluginDirectory());
+		}
+		catch (IOException e)
+		{
+			log.warn("Could not open the folder for community sails", e);
+			return;
+		}
+		communityRefresh = executor.scheduleWithFixedDelay(this::refreshCommunity, 0, COMMUNITY_REFRESH_MINUTES, TimeUnit.MINUTES);
+	}
+
+	/** Executor thread. Nothing is fetched unless the player turned community sails on. */
+	private void refreshCommunity()
+	{
+		CommunitySails sails = community;
+		if (sails == null || !config.communitySails()) return;
+		sails.refresh();
+		refreshMine();
+	}
+
+	private void refreshMine()
+	{
+		CommunitySails sails = community;
+		long hash = accountHash;
+		if (sails == null || !config.communitySails() || hash == -1) return;
+		sails.mine(hash, this::gotMine, problem -> communityProblem = problem);
+	}
+
+	private void gotMine(CommunitySails.Mine answer)
+	{
+		mine = answer;
+		communityProblem = null;
+	}
+
+	/** Swing thread. Sends the design for the moderator to check; answers come back through the callbacks. */
+	void submitSail(Consumer<String> done)
+	{
+		CommunitySails sails = community;
+		long hash = accountHash;
+		String name = localName;
+		Design current = design;
+		if (sails == null || !config.communitySails()) return;
+		if (hash == -1 || name == null)
+		{
+			done.accept("Log in first, so your sail can be matched to your character.");
+			return;
+		}
+		if (current.isBlank())
+		{
+			done.accept("Draw something first.");
+			return;
+		}
+		executor.execute(() -> sails.submit(hash, Text.sanitize(name), current, answer ->
+		{
+			gotMine(answer);
+			done.accept("Sent. Your sail will appear to others once it has been checked.");
+		}, done));
+	}
+
+	/** Swing thread. Takes your sail off the list, or out of the queue. */
+	void withdrawSail(Consumer<String> done)
+	{
+		CommunitySails sails = community;
+		long hash = accountHash;
+		if (sails == null || hash == -1) return;
+		sails.withdraw(hash, answer ->
+		{
+			gotMine(answer);
+			done.accept("Your sail is no longer shown to others.");
+		}, done);
+	}
+
+	/** Swing thread. Reports a sail to the moderator and hides it for you straight away. */
+	void reportSail(Nearby sail, String reason, String note, Consumer<String> done)
+	{
+		CommunitySails sails = community;
+		long hash = accountHash;
+		if (sails == null) return;
+		if (hash == -1)
+		{
+			done.accept("Log in first.");
+			return;
+		}
+		setHidden(sail.key, true);
+		sails.report(hash, sail.id, reason, note, () -> done.accept("Reported, thank you. " + sail.name + "'s sail is hidden for you."), done);
+	}
+
+	/** Any thread. Hides or shows a player's community sail, for you only. */
+	void setHidden(String key, boolean hide)
+	{
+		Set<String> next = new LinkedHashSet<>(hiddenSails);
+		if (hide ? next.add(key) : next.remove(key))
+		{
+			hiddenSails = Collections.unmodifiableSet(next);
+			configManager.setConfiguration(SailPainterConfig.GROUP, "hiddenSails", CommunitySails.formatHidden(next));
+		}
+	}
+
+	Set<String> getHiddenSails()
+	{
+		return hiddenSails;
+	}
+
+	List<Nearby> getNearby()
+	{
+		return nearby;
+	}
+
+	boolean communityOn()
+	{
+		return config.communitySails() && community != null;
+	}
+
+	void openGallery()
+	{
+		LinkBrowser.browse(CommunitySails.SITE);
+	}
+
+	/** Your own sail's state for the panel. */
+	String communityText()
+	{
+		if (!config.communitySails()) return "Turn on Community sails in the settings to see other players' sails and share yours.";
+		String problem = communityProblem;
+		if (problem != null) return problem;
+		if (accountHash == -1) return "Log in to submit your sail.";
+		CommunitySails.Mine answer = mine;
+		if (answer == null) return "Checking your sail…";
+		if (answer.banned) return "You can no longer submit sails.";
+		CommunitySails.MySail latest = answer.sails == null || answer.sails.isEmpty() ? null : answer.sails.get(0);
+		CommunitySails.MySail live = null;
+		if (answer.sails != null)
+		{
+			for (CommunitySails.MySail sail : answer.sails)
+			{
+				if ("live".equals(sail.status))
+				{
+					live = sail;
+					break;
+				}
+			}
+		}
+		if (latest == null) return "You have not submitted a sail yet.";
+		String reason = latest.reason == null || latest.reason.isEmpty() ? "" : " Reason: " + latest.reason;
+		switch (latest.status)
+		{
+			case "pending":
+				return live == null ? "Your sail is waiting to be checked." : "Your new sail is waiting to be checked. Others still see your last one.";
+			case "live":
+				return "Your sail is approved. Everyone with Community sails on sees it.";
+			case "rejected":
+				return (live == null ? "Your sail was not approved." : "Your new sail was not approved; your last one is still shown.") + reason;
+			case "removed":
+				return "Your sail was taken down." + reason;
+			case "withdrawn":
+				return "You withdrew your sail.";
+			default:
+				return live == null ? "You have no sail shown to others." : "Your sail is approved. Everyone with Community sails on sees it.";
+		}
+	}
+
+	/** Whether there is anything of yours to withdraw. */
+	boolean hasOpenSail()
+	{
+		CommunitySails.Mine answer = mine;
+		if (answer == null || answer.sails == null) return false;
+		for (CommunitySails.MySail sail : answer.sails)
+		{
+			if ("live".equals(sail.status) || "pending".equals(sail.status)) return true;
+		}
+		return false;
 	}
 
 	/** Executor thread. Loads the saved design from the plugin's own folder. */

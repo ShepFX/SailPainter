@@ -46,6 +46,30 @@ server involved.
 - Turning sharing off, or turning the plugin off, puts your sail back to plain on their screens.
 - **Show party sails** turns other people's designs off on your screen.
 
+## Community sails
+
+Turn on **Community sails** in the settings to see the sails other Sail Painter players have had
+approved, on whichever boat they are aboard, and to put yours up for everyone to see. It is off
+until you turn it on, because it talks to a server outside RuneLite: https://sails.shep.rip.
+
+- **Submit my sail for review** in the sidebar sends your current design, with your character name,
+  to the Sail Painter moderator. Nobody else sees it until it has been approved. Once it has, it
+  appears on your boat for everyone with Community sails on, and in the gallery at
+  https://sails.shep.rip. The sidebar shows whether it is waiting, approved or turned down.
+- **Stop showing my sail** takes it down again.
+- **Sails near you** lists the community sails on boats around you. **Hide** stops one being drawn
+  for you, and only you; **Report** sends it to the moderator with a reason and hides it for you.
+- **View all sails online** opens the gallery.
+
+The plugin downloads the whole list of approved sails and keeps the pictures in
+`.runelite/plugin-data/sail-painter/community`, then matches names to boats on your own computer.
+The server is never told who is around you. Submitting sends your account hash, so that only you
+can change your sail; the server stores only a salted hash of it. A report sends your account hash
+too, so each person's report counts once; the moderator never sees who reported.
+
+Party sharing still works as before and needs no server. A party member's shared design wins over
+their community sail.
+
 ## Settings
 
 - **Paint my sail** - on or off. Your own boat is painted, and so is whichever boat you are aboard.
@@ -56,6 +80,7 @@ server involved.
   cloth instead, losing the corners on a triangular sail. Square sails look the same either way.
 - **Opacity**, **Shading** and **Smooth picture** (for photos rather than pixel art).
 - **Hide behind crew and rigging** - lets things in front of the sail cover the picture.
+- Under **Community**: **Community sails** (off until you turn it on).
 - Under **Party**: **Share with party** (off until you turn it on) and **Show party sails**.
 - Under **Troubleshooting**: **Paint** whole sail model instead of just the cloth, and **Show debug
   info**, which labels every object on your boat with its ID.
