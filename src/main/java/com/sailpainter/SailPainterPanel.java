@@ -291,10 +291,33 @@ class SailPainterPanel extends PluginPanel
 		return left(spaced);
 	}
 
-	private static String html(String text)
+	static String html(String text)
 	{
 		// Swing's HTML measures widths larger than the pixels they end up taking, so this is smaller than the space.
-		return "<html><div style='width:" + (PREVIEW * 3 / 4) + "px'>" + text + "</div></html>";
+		return "<html><div style='width:" + (PREVIEW * 3 / 4) + "px'>" + escape(text) + "</div></html>";
+	}
+
+	/** Some of this text comes from the server, so markup in it must show as text and never load anything. */
+	static String escape(String text)
+	{
+		if (text == null)
+		{
+			return "";
+		}
+		StringBuilder out = new StringBuilder(text.length());
+		for (char c : text.toCharArray())
+		{
+			switch (c)
+			{
+				case '&': out.append("&amp;"); break;
+				case '<': out.append("&lt;"); break;
+				case '>': out.append("&gt;"); break;
+				case '"': out.append("&quot;"); break;
+				case '\'': out.append("&#39;"); break;
+				default: out.append(c);
+			}
+		}
+		return out.toString();
 	}
 
 	private static <T extends JComponent> T left(T component)
